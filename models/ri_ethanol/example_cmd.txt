@@ -1,0 +1,1 @@
+python apply_ri_ethanol.py --input_csv ../external_test_set.csv --smiles_col IL_SMILES --mole_fraction_col Mole_fraction_IL --output_csv ../predictions_ri_ethanol.csv

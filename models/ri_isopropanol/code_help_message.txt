@@ -1,0 +1,17 @@
+usage: apply_ri_isopropanol.py [-h] --input_csv INPUT_CSV [--smiles_col SMILES_COL] [--mole_fraction_col MOLE_FRACTION_COL] [--temp_col TEMP_COL] [--model_dir MODEL_DIR] [--output_csv OUTPUT_CSV]
+
+Apply the consensus model to predict refractive index of IL in isopropanol.
+
+options:
+  -h, --help            show this help message and exit
+  --input_csv INPUT_CSV
+                        [REQUIRED] Path to the input CSV file (expected comma delimiter).
+  --smiles_col SMILES_COL
+                        Name of the SMILES column in the input CSV (default: SMILES).
+  --mole_fraction_col MOLE_FRACTION_COL
+                        Name of the mole fraction column in the input CSV (default: Mole_fraction).
+  --temp_col TEMP_COL   Name of the temperature column in the input CSV (default: Temperature).
+  --model_dir MODEL_DIR
+                        Directory containing the ensemble of models and metadata (default: RI_isopropanol_ensemble_model).
+  --output_csv OUTPUT_CSV
+                        Path to save the output CSV with predictions (default: predictions.csv).

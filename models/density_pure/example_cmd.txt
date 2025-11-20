@@ -1,0 +1,1 @@
+python apply_density_pure.py --input_csv ../external_test_set.csv --smiles_col IL_SMILES --model_dir density_pure_ensemble_model --output_csv ../predictions_density_pure.csv

@@ -1,0 +1,15 @@
+usage: apply_density_pure.py [-h] --input_csv INPUT_CSV [--smiles_col SMILES_COL] [--temp_col TEMP_COL] [--model_dir MODEL_DIR] [--output_csv OUTPUT_CSV]
+
+Apply the consensus model to predict density of pure IL (not a mixture).
+
+options:
+  -h, --help            show this help message and exit
+  --input_csv INPUT_CSV
+                        [REQUIRED] Path to the input CSV file (expected comma delimiter).
+  --smiles_col SMILES_COL
+                        Name of the SMILES column in the input CSV (default: SMILES).
+  --temp_col TEMP_COL   Name of the temperature column in the input CSV (default: Temperature).
+  --model_dir MODEL_DIR
+                        Directory containing the ensemble of models and metadata (default: density_pure_ensemble_model).
+  --output_csv OUTPUT_CSV
+                        Path to save the output CSV with predictions (default: predictions.csv).
