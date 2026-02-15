@@ -61,7 +61,7 @@ python -m venv ilqspr
 Activate it:
 - macOS / Linux
 ```bash
-source ilqspr/bin/activate  # macOS/Linux
+source ilqspr/bin/activate
 ```
 - Windows (PowerShell)
 ```bash
