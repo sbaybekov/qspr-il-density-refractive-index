@@ -2,7 +2,7 @@
 
 ![Predictors of Density and Refractive Index in IL–Solvent Mixtures](figures/il_github.png)
 
-This repository contains QSPR models for predicting the density (kg/m^3) and refractive index (Na D-line) of binary mixtures of ionic liquids (ILs) with water, ethanol, and isopropanol under near-atmospheric pressure conditions (90–110 kPa), at user-specified IL mole fractions and temperatures.
+This repository contains QSPR models for predicting the density (kg/m<sup>3</sup>) and refractive index (Na D-line) of binary mixtures of ionic liquids (ILs) with water, ethanol, and isopropanol under near-atmospheric pressure conditions (90–110 kPa), at user-specified IL mole fractions and temperatures.
 
 ## Background
 
@@ -16,7 +16,7 @@ Ionic liquids (ILs) are tunable organic salts with negligible vapor pressure, hi
 
 ## Datasets and Models
 
-Training datasets were extracted from the [ILThermo database](https://ilthermo.boulder.nist.gov/) using a specifically developed tool, [pyIonics](https://github.com/kammmran/pyionics).
+Training datasets were extracted from the [ILThermo database](https://ilthermo.boulder.nist.gov/) using a specifically developed tool, [pyIonics](https://github.com/kammmran/pyionics). The external test set was provided by the [Institute of Petrochemical Processes](https://nkpi.az/?lang=en) (Baku, Azerbaijan).
 
 The curation procedure included duplicate removal, consistency checks, and standardization of molecular structures and composition variables.
 
@@ -26,7 +26,7 @@ Model development was based on five independently shuffled variants of each cura
 
 ### Model Performance
 
-| Property | System | 5-CV RMSE | 5-CV R^2 |
+| Property | System | 5-CV RMSE | 5-CV R<sup>2</sup> |
 |----------|--------|-----------|----------|
 | Density  | Pure IL        | 33.19 | 0.96 |
 | Density  | IL–Water        | 32.42 | 0.92 |
@@ -108,14 +108,14 @@ Example:
 
 | IL_SMILES              | Mole_fraction_IL | Temperature |
 |------------------------|------------------|-------------|
-| C[N+](C)(C)C.[Cl-]     | 0.30             | 298.15      |
+| C\[N+](C)(C)C.\[Cl-]     | 0.30             | 298.15      |
 
 Column names can be customized via command-line arguments. 
-The default expected names for the columns are **SMILES**, **Mole_fraction**, **Temperature**, respectively.
+The default expected names for the columns are `SMILES`, `Mole_fraction`, `Temperature`, respectively.
 
 ---
 
-### Application of model (example)
+### Application of a model (example)
 
 Run the following command:
 
@@ -130,25 +130,31 @@ python models/ri_ethanol/apply_ri_ethanol.py \
 ⸻
 
 Required Argument
-	•	`--input_csv INPUT_CSV`
+
+`--input_csv INPUT_CSV`
 Path to the input CSV file (comma-delimited).
 
 ⸻
 
 Optional Arguments
-	•	`--smiles_col SMILES_COL`
+
+`--smiles_col SMILES_COL`
 Name of the SMILES column in the input CSV.
 Default: `SMILES`
-	•	`--mole_fraction_col MOLE_FRACTION_COL`
+
+`--mole_fraction_col MOLE_FRACTION_COL`
 Name of the mole fraction column.
 Default: `Mole_fraction`
-	•	`--temp_col TEMP_COL`
+
+`--temp_col TEMP_COL`
 Name of the temperature column.
 Default: `Temperature`
-	•	`--model_dir MODEL_DIR`
+
+`--model_dir MODEL_DIR`
 Directory containing the trained ensemble model and metadata.
 Default: `RI_ethanol_ensemble_model`
-	•	`--output_csv OUTPUT_CSV`
+
+`--output_csv OUTPUT_CSV`
 Path to save the output CSV with predictions.
 Default: `predictions.csv`
 
