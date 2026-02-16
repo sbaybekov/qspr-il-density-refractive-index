@@ -1,5 +1,5 @@
 numpy>=1.26
 pandas>=2.2
-mordred-descriptor>=2.0.6
-rdkit-pypi>=2023.9
+mordredcommunity>=2.0.6
+rdkit>=2023.9
 joblib>=1.5
