@@ -97,11 +97,7 @@ The default expected names for the columns are `SMILES`, `Mole_fraction`, `Tempe
 Run the following command:
 
 ```bash
-python models/ri_ethanol/apply_ri_ethanol.py \
-    --input_csv datasets/external_test_set.csv \
-    --smiles_col IL_SMILES \
-    --mole_fraction_col Mole_fraction_IL \
-    --output_csv predictions_ri_ethanol.csv
+python models/ri_ethanol/apply_ri_ethanol.py --input_csv datasets/external_test_set.csv --smiles_col IL_SMILES --mole_fraction_col Mole_fraction_IL --model_dir models/ri_ethanol/RI_ethanol_ensemble_model --output_csv predictions_ri_ethanol.csv
 ```
 
 ⸻
