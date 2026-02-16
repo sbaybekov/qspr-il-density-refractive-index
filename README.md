@@ -53,34 +53,10 @@ cd qspr-il-density-refractive-index
 
 ### 2. Create and activate a virtual environment
 
-#### Option 1 - Using `venv`:
+Using `conda`:
 Create environment:
 ```bash
-python -m venv ilqspr
-```
-Activate it:
-- macOS / Linux
-```bash
-source ilqspr/bin/activate
-```
-- Windows (PowerShell)
-```bash
-ilqspr\Scripts\Activate.ps1
-```
-- Windows (Command Prompt)
-```bash
-ilqspr\Scripts\activate
-```
-
-Install dependencies:
-```bash
-pip install -r requirements.txt
-```
-
-#### Option 2 - Using `conda`:
-Create environment:
-```bash
-conda create -n ilqspr python=3.11
+conda create -n ilqspr python=3.11.5
 ```
 Activate it:
 ```bash
@@ -89,6 +65,7 @@ conda activate ilqspr
 
 Install dependencies:
 ```bash
+conda install xgboost=2.1.4
 pip install -r requirements.txt
 ```
 
