@@ -1,4 +1,4 @@
-Record_ID,IL_SMILES,Solvent name,Solvent_SMILES,Density (kg/m3),Refractive index (Na D-line),Standardized_IL_SMILES,Changes,Weight_fraction_IL,IL_MW,Solvent_MW,Mole_fraction_IL,Data_quality_flag
+Record_ID,SMILES,Solvent name,Solvent_SMILES,Density (kg/m3),Refractive index (Na D-line),Standardized_IL_SMILES,Changes,Weight_fraction_IL,IL_MW,Solvent_MW,Mole_fraction_IL,Data_quality_flag
 1,CCC[NH3+].OC(=O)\C=C/C([O-])=O,water,O,811.0,1.3836,CCC[NH3+].O=C([O-])C=CC(=O)O,Stereo removed,0.2,175.18399999999997,18.015,0.0250643129539993,credible
 2,CCC[NH3+].OC(=O)\C=C/C([O-])=O,isopropanol,CC(C)O,810.0,1.3837,CCC[NH3+].O=C([O-])C=CC(=O)O,Stereo removed,0.2,175.18399999999997,60.096,0.0789872139973082,credible
 3,CCC[NH3+].OC(=O)\C=C/C([O-])=O,ethanol,CCO,902.0,1.3805,CCC[NH3+].O=C([O-])C=CC(=O)O,Stereo removed,0.2,175.18399999999997,46.069,0.0616881247447459,credible

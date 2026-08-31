@@ -3,3 +3,20 @@
 
 # Large generated descriptor file
 datasets/training_sets/descriptors.zip
+
+# Python bytecode and local prediction outputs
+__pycache__/
+*.py[cod]
+*.egg-info/
+predictions*.csv
+results/*_prediction.csv
+docs/_build/
+docs/html/
+docs/doctrees/
+
+# Default raw-download cache for qspr_il.data.ionics / qspr_il.data.cleaning
+/data/
+
+.venv/
+.pytest_cache/
+test/
