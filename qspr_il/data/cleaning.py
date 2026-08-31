@@ -644,6 +644,9 @@ def fetch_curated_dataset(
     solvent_name: str | None,
     data_root=None,
     max_datasets: int | None = None,
+    year: str = "",
+    author: str = "",
+    keyword: str = "",
     progress_callback=None,
     **filter_kwargs,
 ) -> pd.DataFrame:
@@ -657,7 +660,11 @@ def fetch_curated_dataset(
     name (e.g. ``"Refractive index"``) -- it's resolved against the live search results via
     :func:`resolve_property_display_name`. Raises :class:`ValueError` if nothing matches.
     Pass ``max_datasets`` to cap how many ILThermo datasets are downloaded (useful for quick,
-    rate-limit-friendly runs), and ``pressure_range``/``temp_range``/``property_range``/
+    rate-limit-friendly runs). ``year``/``author``/``keyword`` are the same server-side
+    ILThermo search filters ``pyionics`` exposes (forwarded to
+    :func:`qspr_il.data.ionics.client.getIdsets` as ``year``/``auth``/``keyw``): a publication
+    year, an author surname, and a free-text keyword, each narrowing the ``ilsearch`` query
+    *before* the client-side property-name filtering happens. And ``pressure_range``/``temp_range``/``property_range``/
     ``use_pubchem_fallback`` (via ``filter_kwargs``, forwarded to :func:`build_curated_dataset`)
     to restrict conditions or disable the PubChem name-lookup fallback (see
     :func:`resolve_smiles_by_name`). ``progress_callback``, if given, is called with a one-line
@@ -673,9 +680,18 @@ def fetch_curated_dataset(
     ncmp = "1" if solvent_name is None else "2"
     data_root_path = ionics_client.get_data_dir(data_root)
 
-    _report(f"Searching ILThermo for '{property_query}'...")
+    active_filters = [
+        f"{label}={value}"
+        for label, value in (("year", year), ("author", author), ("keyword", keyword))
+        if value
+    ]
+    _report(
+        f"Searching ILThermo for '{property_query}'"
+        + (f" ({', '.join(active_filters)})" if active_filters else "")
+        + "..."
+    )
     idsets_path = ionics_client.getIdsets(
-        prop=None, ncmp=ncmp, data_root=data_root_path)
+        prop=None, ncmp=ncmp, year=year, auth=author, keyw=keyword, data_root=data_root_path)
     idsets_json = json.load(open(idsets_path))
     display_name = resolve_property_display_name(idsets_json, property_query)
     if display_name is None:

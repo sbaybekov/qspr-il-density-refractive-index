@@ -93,6 +93,10 @@ results. ``solvent_name`` is one of ``"water"``, ``"ethanol"``,
 limitations below), or ``None`` for a pure ionic liquid. Pass
 ``pressure_range`` (or ``None`` to skip pressure filtering entirely),
 ``temp_range``, or ``property_range`` to narrow the accepted conditions.
+``year``, ``author``, and ``keyword`` are the same server-side ILThermo
+``ilsearch`` filters ``pyionics`` exposes (a publication year, an author
+surname, a free-text keyword); each narrows the query before any cleaning, and
+the interactive CLI (``qspr.py``) and Streamlit app both prompt for them.
 
 This module only fetches and cleans data; it does not train any model itself,
 and never touches the existing trained ``.joblib`` ensembles under

@@ -20,3 +20,5 @@ docs/doctrees/
 .venv/
 .pytest_cache/
 test/
+
+log*

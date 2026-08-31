@@ -7,6 +7,9 @@ QSPR Modeling of Ionic Liquid properties
 This project provides ensemble QSPR models for predicting ionic-liquid density
 and refractive index in water, ethanol, isopropanol, and pure ionic liquids.
 
+A hosted Streamlit app is available at
+https://qspr-il-density-refractive-index.streamlit.app/ (see :doc:`streamlit_app`).
+
 Project background
 ------------------
 
@@ -61,8 +64,6 @@ Repository structure
   registry (:doc:`engine`), the data fetch/cleaning pipeline (:doc:`data_pipeline`),
   the CLI, and the Streamlit app (:doc:`streamlit_app`).
 * ``datasets/`` contains curated training sets and the external test set.
-* ``huggingface_space/`` is a standalone export for deploying the Streamlit
-  app to Hugging Face Spaces.
 * ``figures/`` contains project figures.
 * ``results/`` contains generated prediction files and analysis artifacts.
 * ``tests/`` contains the pytest suite.
@@ -191,7 +192,7 @@ Documentation contents
 * :doc:`data` - dataset sizes, ranges, and missing-value statistics
 * :doc:`results` - interactive UMAP visualizations and generated predictions
 * :doc:`help_files` - command-line options reference
-* :doc:`streamlit_app` - the GUI and Hugging Face Spaces deployment
+* :doc:`streamlit_app` - the Streamlit GUI
 
 .. toctree::
   :hidden:

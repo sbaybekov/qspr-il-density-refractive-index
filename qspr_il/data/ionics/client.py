@@ -21,17 +21,52 @@ import csv
 import json
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import lru_cache
 from pathlib import Path
 
 import pandas as pd
 import requests
+from requests.adapters import HTTPAdapter
 from tqdm import tqdm
+
+try:  # urllib3 ships with requests; guard only against a very old layout
+    from urllib3.util.retry import Retry
+except Exception:  # pragma: no cover
+    Retry = None
 
 KEYDATA_DIR = Path(__file__).resolve().parent / "keydata"
 DEFAULT_PROPERTY_IDSETS = KEYDATA_DIR / "property_idsets.csv"
 DEFAULT_SMILES_TABLE = KEYDATA_DIR / "smiles.csv"
 
 _NCMP_LABELS = {"1": "pure", "2": "binary", "3": "triple"}
+
+# ILThermo serves every dataset from one host over HTTPS; a fresh connection (DNS +
+# TCP + TLS) per request dominates the cost of downloading a search's worth of sets.
+# A pooled session with keep-alive plus a bounded thread pool turns a serial run of
+# hundreds of tiny requests into a handful of concurrent, connection-reused ones.
+_REQUEST_TIMEOUT = 30
+_MAX_DOWNLOAD_WORKERS = 8
+
+
+@lru_cache(maxsize=1)
+def _http_session() -> requests.Session:
+    session = requests.Session()
+    if Retry is not None:
+        retry = Retry(
+            total=3,
+            backoff_factor=0.5,
+            status_forcelist=(500, 502, 503, 504),
+            allowed_methods=frozenset({"GET"}),
+        )
+        adapter = HTTPAdapter(
+            max_retries=retry, pool_connections=_MAX_DOWNLOAD_WORKERS, pool_maxsize=_MAX_DOWNLOAD_WORKERS)
+    else:  # pragma: no cover
+        adapter = HTTPAdapter(
+            pool_connections=_MAX_DOWNLOAD_WORKERS, pool_maxsize=_MAX_DOWNLOAD_WORKERS)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
 
 
 def get_data_dir(data_root: str | Path | None = None) -> Path:
@@ -156,6 +191,31 @@ def getData(
     return download_idsets(idsets, idset_dir)
 
 
+def _download_one_idset(setid: str, output_dir: Path) -> str:
+    """Fetch a single ILThermo dataset and write it as ``idset_<setid>.json``. Returns ``setid``."""
+    url = f"https://ilthermo.boulder.nist.gov/ILT2/ilset?set={setid}"
+    resp = _http_session().get(url, timeout=_REQUEST_TIMEOUT)
+    resp.raise_for_status()
+    try:
+        data = resp.json()
+        file_base = None
+        if isinstance(data, dict) and "idsets" in data:
+            if isinstance(data["idsets"], list) and data["idsets"]:
+                entry = data["idsets"][0]
+                if isinstance(entry, dict):
+                    file_base = entry.get("id") or entry.get("name")
+        if not file_base:
+            file_base = str(setid)
+    except Exception:
+        data = {"raw": resp.content.decode("utf-8", errors="replace")}
+        file_base = str(setid)
+    data["filename"] = file_base
+    fname = output_dir / f"idset_{setid}.json"
+    with open(fname, "w", encoding="utf-8") as outf:
+        json.dump(data, outf, ensure_ascii=False, indent=2)
+    return str(setid)
+
+
 def download_idsets(setids: list[str], output_dir: str | Path, progress_callback=None) -> Path:
     """Download each ILThermo dataset id in ``setids`` and save it as one JSON file per set.
 
@@ -164,36 +224,28 @@ def download_idsets(setids: list[str], output_dir: str | Path, progress_callback
     used by :func:`getIdsets` can go stale against the live ILThermo API) before downloading,
     rather than always fetching every idset a search returns.
 
-    ``progress_callback``, if given, is called as ``progress_callback(index, total, setid)``
-    before each download (``index`` is 1-based) -- used by :mod:`qspr_il.data.cleaning` and
-    the Streamlit app to show live download progress.
+    Downloads run concurrently (up to :data:`_MAX_DOWNLOAD_WORKERS` at a time) over a pooled,
+    keep-alive session. ``progress_callback``, if given, is called
+    ``progress_callback(completed, total, setid)`` as each set finishes (``completed`` counts
+    1..total in completion order) -- used by :mod:`qspr_il.data.cleaning` and the Streamlit
+    app to show live download progress.
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     total = len(setids)
-    for i, setid in enumerate(tqdm(setids, desc="Downloading idsets"), start=1):
-        if progress_callback:
-            progress_callback(i, total, setid)
-        url = f"https://ilthermo.boulder.nist.gov/ILT2/ilset?set={setid}"
-        resp = requests.get(url)
-        resp.raise_for_status()
-        try:
-            data = resp.json()
-            file_base = None
-            if isinstance(data, dict) and "idsets" in data:
-                if isinstance(data["idsets"], list) and data["idsets"]:
-                    entry = data["idsets"][0]
-                    if isinstance(entry, dict):
-                        file_base = entry.get("id") or entry.get("name")
-            if not file_base:
-                file_base = str(setid)
-        except Exception:
-            data = {"raw": resp.content.decode("utf-8", errors="replace")}
-            file_base = str(setid)
-        data["filename"] = file_base
-        fname = output_dir / f"idset_{setid}.json"
-        with open(fname, "w", encoding="utf-8") as outf:
-            json.dump(data, outf, ensure_ascii=False, indent=2)
+    if total == 0:
+        return output_dir
+
+    workers = max(1, min(_MAX_DOWNLOAD_WORKERS, total))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(_download_one_idset, setid, output_dir)
+                   for setid in setids]
+        for completed, future in enumerate(
+            tqdm(as_completed(futures), desc="Downloading idsets", total=total), start=1
+        ):
+            done_setid = future.result()
+            if progress_callback:
+                progress_callback(completed, total, done_setid)
 
     return output_dir
 

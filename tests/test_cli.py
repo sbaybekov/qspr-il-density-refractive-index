@@ -133,6 +133,9 @@ def test_action_data_fetches_and_saves_curated_csv(monkeypatch, tmp_path, capsys
             "",  # solvent: blank -> pure
             "none",  # temperature range: no limit
             "none",  # pressure range: no limit
+            "",  # search filter: year
+            "",  # search filter: author
+            "",  # search filter: keyword
             "10",  # max datasets
             str(output_csv),  # output path
         ]
@@ -152,7 +155,7 @@ def test_action_data_fetches_and_saves_curated_csv(monkeypatch, tmp_path, capsys
 
 def test_action_data_reports_error_for_unmatched_property(monkeypatch, capsys):
     answers = iter(["2", "not-a-real-property", "",
-                   "none", "none", "5", "out.csv"])
+                   "none", "none", "", "", "", "5", "out.csv"])
     monkeypatch.setattr("builtins.input", lambda *_: next(answers, ""))
 
     def raise_value_error(*a, **k):
@@ -176,6 +179,9 @@ def test_action_both_chains_into_matching_prediction_model(monkeypatch, tmp_path
             "",  # solvent: blank -> pure
             "none",  # temperature range
             "none",  # pressure range
+            "",  # search filter: year
+            "",  # search filter: author
+            "",  # search filter: keyword
             "5",  # max datasets
             str(output_data_csv),  # data output path
             "Y",  # run the matching model now
@@ -212,6 +218,9 @@ def test_action_both_skips_prediction_when_no_matching_model(monkeypatch, tmp_pa
             "",  # solvent: blank -> pure
             "none",
             "none",
+            "",  # search filter: year
+            "",  # search filter: author
+            "",  # search filter: keyword
             "5",
             str(output_data_csv),
         ]
@@ -256,6 +265,9 @@ def test_action_both_auto_trains_and_predicts_when_no_matching_model(monkeypatch
             "",  # solvent: blank -> pure
             "none",
             "none",
+            "",  # search filter: year
+            "",  # search filter: author
+            "",  # search filter: keyword
             "5",
             str(output_data_csv),
             "y",  # train a new model now
@@ -289,6 +301,9 @@ def test_action_both_can_decline_training_after_no_matching_model(monkeypatch, t
             "",
             "none",
             "none",
+            "",  # search filter: year
+            "",  # search filter: author
+            "",  # search filter: keyword
             "5",
             str(output_data_csv),
             "n",  # decline training

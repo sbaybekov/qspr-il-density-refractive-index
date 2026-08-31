@@ -68,7 +68,11 @@ def sample_pure_prediction_df():
 
 @pytest.fixture
 def mock_ilthermo_responses(monkeypatch):
-    """Monkeypatch requests.get so ionics.client never makes a real network call."""
+    """Stub every HTTP path ionics.client uses so it never makes a real network call.
+
+    Covers both the module-level ``requests.get`` (used by ``getIdsets``) and the pooled
+    ``requests.Session`` the concurrent ``download_idsets`` fetches through.
+    """
     import requests
 
     calls = []
@@ -100,4 +104,6 @@ def mock_ilthermo_responses(monkeypatch):
         raise AssertionError(f"Unexpected URL in test: {url}")
 
     monkeypatch.setattr(requests, "get", fake_get)
+    monkeypatch.setattr(
+        requests.Session, "get", lambda self, url, *a, **kw: fake_get(url, *a, **kw))
     return calls

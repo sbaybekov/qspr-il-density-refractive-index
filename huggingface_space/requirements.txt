@@ -1,2 +1,0 @@
-streamlit>=1.38
-qspr_il[gui] @ git+https://github.com/kammmran/qspr-il-density-refractive-index.git

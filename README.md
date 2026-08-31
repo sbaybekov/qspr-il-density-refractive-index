@@ -4,6 +4,8 @@
 
 This repository contains QSPR models for predicting the density (kg/m<sup>3</sup>) and refractive index (Na D-line) of binary mixtures of ionic liquids (ILs) with water, ethanol, and isopropanol under near-atmospheric pressure conditions (90–110 kPa), at user-specified IL mole fractions and temperatures.
 
+**Live app:** https://qspr-il-density-refractive-index.streamlit.app/
+
 ## Authors
 
 - [Shamkhal Baybekov](https://github.com/sbaybekov) – [LinkedIn](https://www.linkedin.com/in/shamkhal-baybekov/)
@@ -17,7 +19,6 @@ Ionic liquids (ILs) are tunable organic salts with negligible vapor pressure, hi
 
 - `qspr_il/` – The installable package: the prediction engine and model registry (`qspr_il/models/`, `qspr_il/registry.py`), the ILThermo data fetch/cleaning pipeline (`qspr_il/data/`), the CLI (`qspr_il/cli.py`), and the Streamlit app (`qspr_il/app.py`)
 - `datasets/` – Curated training sets and an external test set
-- `huggingface_space/` – Standalone export for deploying the Streamlit app to Hugging Face Spaces
 - `figures/` - Contains the README figure
 - `results/` - Contains generated prediction files and interactive UMAP visualizations (`results/interactive_umap/`) comparing the training data to the external test set for each model
 - `tests/` - Pytest suite
@@ -196,14 +197,17 @@ python qspr.py --help
 
 ### Streamlit GUI
 
-A Streamlit app provides a graphical alternative to the CLI:
+A Streamlit app provides a graphical alternative to the CLI. A hosted instance
+is available at
+[qspr-il-density-refractive-index.streamlit.app](https://qspr-il-density-refractive-index.streamlit.app/),
+or run it locally:
 
 ```bash
 python -m pip install -e ".[gui]"
 streamlit run qspr_il/app.py
 ```
 
-It supports the same 8 models, either via CSV upload or a single-SMILES entry form. See `docs/streamlit_app.rst` for how this is packaged for deployment to Hugging Face Spaces.
+It supports the same 8 models, either via CSV upload or a single-SMILES entry form. The same command is the main module for the Streamlit Community Cloud deployment. See `docs/streamlit_app.rst` for details.
 
 ### Interactive UMAP Visualizations
 

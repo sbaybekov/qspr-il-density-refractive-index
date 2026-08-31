@@ -213,6 +213,12 @@ def _prompt_data_settings() -> dict:
     temp_range = _prompt_range("Temperature (K)", DEFAULT_TEMP_RANGE)
     pressure_range = _prompt_range("Pressure (kPa)", DEFAULT_PRESSURE_RANGE)
 
+    print(
+        "\nOptional ILThermo search filters (same as pyionics; blank = skip):")
+    year = _prompt("  Publication year", "")
+    author = _prompt("  Author surname", "")
+    keyword = _prompt("  Keyword", "")
+
     max_datasets_raw = _prompt(
         "Max ILThermo datasets to download (blank = no limit)", "30")
     max_datasets = int(max_datasets_raw) if max_datasets_raw.strip() else None
@@ -225,6 +231,9 @@ def _prompt_data_settings() -> dict:
         "solvent_name": solvent_name,
         "temp_range": temp_range,
         "pressure_range": pressure_range,
+        "year": year,
+        "author": author,
+        "keyword": keyword,
         "max_datasets": max_datasets,
         "output_csv": output_csv,
     }
@@ -249,6 +258,9 @@ def _run_data_action() -> tuple[pd.DataFrame, str | None, str | None, str] | Non
             settings["property_query"],
             settings["solvent_name"],
             max_datasets=settings["max_datasets"],
+            year=settings["year"],
+            author=settings["author"],
+            keyword=settings["keyword"],
             temp_range=settings["temp_range"],
             pressure_range=settings["pressure_range"],
             progress_callback=lambda message: print(f"  {message}"),

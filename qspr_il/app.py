@@ -1,16 +1,24 @@
 """Streamlit GUI for the QSPR density/refractive-index prediction models.
 
-Run locally with::
+Run locally or on Streamlit Community Cloud with::
 
     streamlit run qspr_il/app.py
 
-For Hugging Face Spaces deployment, see ``huggingface_space/`` at the repo
-root and :doc:`/streamlit_app` in the Sphinx docs.
+See :doc:`/streamlit_app` in the Sphinx docs.
 """
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+
+# When Streamlit runs this file as a script (``streamlit run qspr_il/app.py``),
+# only this file's directory -- not the repo root -- is placed on ``sys.path``,
+# so ``import qspr_il`` would fail. Add the repo root before importing anything
+# from the package.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 import numpy as np
 import pandas as pd
@@ -425,6 +433,18 @@ def _run_data_mode(also_run_model: bool) -> None:
     max_datasets = st.number_input(
         "Max ILThermo datasets to download", min_value=1, value=30, step=5)
 
+    with st.expander("Advanced ILThermo search filters (pyionics)"):
+        st.caption(
+            "The same server-side `ilsearch` filters the `pyionics` client exposes -- each "
+            "one narrows the ILThermo query before any client-side cleaning. Leave blank to "
+            "skip."
+        )
+        fcol1, fcol2, fcol3 = st.columns(3)
+        year_filter = fcol1.text_input("Publication year", value="").strip()
+        author_filter = fcol2.text_input("Author surname", value="").strip()
+        keyword_filter = fcol3.text_input("Keyword", value="").strip()
+    search_filters = (year_filter, author_filter, keyword_filter)
+
     if st.button("Fetch data", type="primary"):
         status = st.status(
             f"Fetching '{property_query}' data from ILThermo...", expanded=True)
@@ -437,6 +457,9 @@ def _run_data_mode(also_run_model: bool) -> None:
                 property_query,
                 solvent_name,
                 max_datasets=int(max_datasets),
+                year=year_filter,
+                author=author_filter,
+                keyword=keyword_filter,
                 temp_range=(temp_min, temp_max),
                 pressure_range=pressure_range,
                 progress_callback=_on_progress,
@@ -454,14 +477,14 @@ def _run_data_mode(also_run_model: bool) -> None:
         )
         resolved_property = df.loc[0, "Property"] if not df.empty else None
         st.session_state["data_result"] = (
-            df, resolved_property, solvent_name, property_query)
+            df, resolved_property, solvent_name, property_query, search_filters)
 
     cached = st.session_state.get("data_result")
     if cached is None:
         return
-    df, resolved_property, solvent_name, cached_query = cached
-    if cached_query != property_query:
-        return  # stale result from a different property selection
+    df, resolved_property, solvent_name, cached_query, cached_filters = cached
+    if cached_query != property_query or cached_filters != search_filters:
+        return  # stale result from a different property selection or filter set
 
     if df.empty:
         st.warning(

@@ -12,6 +12,7 @@ import json
 import re
 import warnings
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -140,47 +141,88 @@ def load_models_and_metadata(model_dir: str | Path) -> LoadedEnsemble:
     return LoadedEnsemble(models=models, metadata=model_metadata)
 
 
+@lru_cache(maxsize=16)
+def _filtered_calculator(required: tuple[str, ...]) -> Calculator:
+    """A Mordred calculator restricted to ``required`` descriptor names.
+
+    Constructing a full ``Calculator`` registers ~1800 descriptors and is by far the
+    largest fixed cost of a prediction run -- it used to be paid once per SMILES
+    component per ensemble member. Cache the filtered calculators (keyed by the
+    canonicalized descriptor set) so it's paid once per distinct set instead. The
+    returned calculator is reused read-only across calls.
+    """
+    wanted = set(required)
+    calc = Calculator(mordred_descriptors, ignore_3D=True)
+    calc.descriptors = [d for d in calc.descriptors if str(d) in wanted]
+    return calc
+
+
+def _component_descriptor_vectors(components, calc: Calculator) -> dict[str, np.ndarray]:
+    """Descriptor vector (in ``calc`` order) for each RDKit-parseable component SMILES.
+
+    ``components`` is deduplicated by the caller; each distinct component is parsed and
+    run through Mordred exactly once. Unparseable components are simply absent from the
+    returned mapping.
+    """
+    vectors: dict[str, np.ndarray] = {}
+    for smi in components:
+        mol = Chem.MolFromSmiles(smi)
+        if mol is None:
+            continue
+        result = calc(mol)
+        vectors[smi] = np.fromiter(
+            (np.nan if isinstance(v, Missing) else v for v in result.values()),
+            dtype=np.float64,
+            count=len(calc.descriptors),
+        )
+    return vectors
+
+
+def _descriptor_matrix(smiles_list, required_descriptors) -> tuple[np.ndarray, list[str]]:
+    """Mean Mordred descriptor vectors for a column of (multi-component) SMILES.
+
+    Returns ``(matrix, names)`` where ``matrix`` has shape ``(len(smiles_list), len(names))``
+    and ``names`` is the calculator's own ordering of ``required_descriptors``. Each distinct
+    component is standardized and calculated only once regardless of how many rows repeat it
+    -- prediction inputs are typically a few ionic liquids swept over many temperature /
+    mole-fraction points. Rows with no parseable component come back all-NaN.
+    """
+    calc = _filtered_calculator(tuple(sorted(set(required_descriptors))))
+    names = [str(d) for d in calc.descriptors]
+
+    row_components = [str(s).split(".") for s in smiles_list]
+    unique_components = {c for parts in row_components for c in parts}
+    vectors = _component_descriptor_vectors(sorted(unique_components), calc)
+
+    matrix = np.full((len(smiles_list), len(names)), np.nan, dtype=np.float64)
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore", category=RuntimeWarning, message="Mean of empty slice")
+        for i, parts in enumerate(row_components):
+            present = [vectors[c] for c in parts if c in vectors]
+            if present:
+                matrix[i] = np.nanmean(np.vstack(present), axis=0)
+    return matrix, names
+
+
 def calculate_descriptors(smiles: str, required_descriptors: list[str]) -> tuple[np.ndarray | None, list[str] | None]:
     """Compute the mean Mordred descriptor vector across all components of a multi-part SMILES."""
-    smiles_list = smiles.split(".")
-    calc = Calculator(mordred_descriptors, ignore_3D=True)
-    calc.descriptors = [d for d in calc.descriptors if str(
-        d) in required_descriptors]
-    descriptor_vectors = []
-    descriptor_names = None
-    for smi in smiles_list:
-        mol = Chem.MolFromSmiles(smi)
-        if mol is not None:
-            desc = calc(mol)
-            if descriptor_names is None:
-                descriptor_names = [str(d) for d in desc.keys()]
-            desc_vector = [np.nan if isinstance(
-                value, Missing) else value for _, value in desc.items()]
-            descriptor_vectors.append(desc_vector)
-        else:
-            print(f"Invalid SMILES: {smi}")
-    if descriptor_vectors:
-        descriptor_vectors = np.array(descriptor_vectors, dtype=np.float64)
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore", category=RuntimeWarning, message="Mean of empty slice")
-            mean_descriptor_vector = np.nanmean(descriptor_vectors, axis=0)
-        return mean_descriptor_vector, descriptor_names
-    print(f"No valid molecules found for SMILES: {smiles}")
-    return None, None
+    calc = _filtered_calculator(tuple(sorted(set(required_descriptors))))
+    vectors = _component_descriptor_vectors(smiles.split("."), calc)
+    if not vectors:
+        return None, None
+    names = [str(d) for d in calc.descriptors]
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore", category=RuntimeWarning, message="Mean of empty slice")
+        mean_descriptor_vector = np.nanmean(np.vstack(list(vectors.values())), axis=0)
+    return mean_descriptor_vector, names
 
 
 def process_il_smiles_list(smiles_list: list[str], required_descriptors: list[str]) -> np.ndarray:
     """Compute descriptor vectors for a whole column of (possibly multi-component) SMILES."""
-    descriptor_vectors = []
-    for smiles in smiles_list:
-        mean_descriptor_vector, _ = calculate_descriptors(
-            smiles, required_descriptors)
-        if mean_descriptor_vector is not None:
-            descriptor_vectors.append(mean_descriptor_vector)
-        else:
-            descriptor_vectors.append([np.nan] * len(required_descriptors))
-    return np.array(descriptor_vectors)
+    matrix, _ = _descriptor_matrix(smiles_list, required_descriptors)
+    return matrix
 
 
 def prepare_input(
@@ -256,8 +298,13 @@ def predict(
     ``mole_fraction_col=None`` skips the mole-fraction feature (pure-IL models). If an
     individual ensemble member fails, its predictions are recorded as NaN so the remaining
     models can still contribute to the consensus. ``progress_callback``, if given, is called
-    with a one-line status string per ensemble member (descriptor calculation, then
-    inference) -- this is the slowest part of a prediction run, so it's worth reporting.
+    with a one-line status string per ensemble member -- inference is what varies per member,
+    so it's what's reported.
+
+    Mordred descriptors are computed once for the union of every member's required set (and
+    once per *distinct* SMILES component within that), then sliced per member -- the shipped
+    ensembles all share a single descriptor list, so this replaces N full descriptor passes
+    with one.
     """
 
     def _report(message: str) -> None:
@@ -269,29 +316,31 @@ def predict(
     predictions = []
     n_models = len(ensemble.models)
 
-    for i, (model, metadata) in enumerate(zip(ensemble.models, ensemble.metadata), 1):
-        _report(
-            f"Model {i}/{n_models}: calculating Mordred descriptors for {len(all_smiles_list)} row(s)...")
-        try:
-            required_descriptors_model = metadata["descriptors"]
-            descriptor_array = process_il_smiles_list(
-                all_smiles_list, required_descriptors_model)
-            temperature_array = data[temp_col].values.reshape(-1, 1)
-            feature_arrays = [descriptor_array, temperature_array]
-            if mole_fraction_col is not None:
-                feature_arrays.append(
-                    data[mole_fraction_col].values.reshape(-1, 1))
-            descriptor_array = np.hstack(feature_arrays)
-        except Exception as e:
-            print(f"Error calculating descriptors for Model {i}: {e}")
-            _report(
-                f"Model {i}/{n_models}: descriptor calculation failed ({e}) -- recorded as NaN.")
-            predictions.append(pd.Series([np.nan] * len(all_smiles_list)))
-            continue
+    union_descriptors = sorted(
+        {d for md in ensemble.metadata for d in md["descriptors"]})
+    n_unique = len({c for s in all_smiles_list for c in str(s).split(".")})
+    _report(
+        f"Calculating Mordred descriptors for {len(all_smiles_list)} row(s) "
+        f"({n_unique} unique component(s), {len(union_descriptors)} descriptor(s))..."
+    )
+    union_matrix, union_names = _descriptor_matrix(
+        all_smiles_list, union_descriptors)
+    col_of = {name: j for j, name in enumerate(union_names)}
 
+    temperature_array = data[temp_col].values.reshape(-1, 1)
+    mole_fraction_array = (
+        data[mole_fraction_col].values.reshape(-1, 1) if mole_fraction_col is not None else None
+    )
+
+    for i, (model, metadata) in enumerate(zip(ensemble.models, ensemble.metadata), 1):
         _report(f"Model {i}/{n_models}: predicting...")
         try:
-            preds = model.predict(descriptor_array)
+            wanted = set(metadata["descriptors"])
+            cols = [col_of[name] for name in union_names if name in wanted]
+            feature_arrays = [union_matrix[:, cols], temperature_array]
+            if mole_fraction_array is not None:
+                feature_arrays.append(mole_fraction_array)
+            preds = model.predict(np.hstack(feature_arrays))
             predictions.append(pd.Series(preds))
         except Exception as e:
             print(f"Error processing Model {i}: {e}")
@@ -321,8 +370,8 @@ def run_prediction(
     Any column argument left as ``None`` falls back to ``spec``'s defaults. Pass an
     already-loaded ``ensemble`` (e.g. from a cache) to avoid reloading the joblib files.
     ``progress_callback``, if given, is called with a one-line status string at each stage
-    (standardization, ensemble loading, per-model descriptor calculation and inference) --
-    used by the CLI and Streamlit app to show what's happening during a run instead of a
+    (standardization, ensemble loading, the shared descriptor pass, and per-member inference)
+    -- used by the CLI and Streamlit app to show what's happening during a run instead of a
     blank wait, especially for larger inputs where descriptor calculation dominates runtime.
     """
 

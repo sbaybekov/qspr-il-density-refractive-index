@@ -46,5 +46,4 @@ below the prediction results::
 This reads directly from ``results/interactive_umap/`` in the local
 repository checkout; it isn't bundled into the installed ``qspr_il`` package
 (the files are several MB of static HTML each), so it's only available when
-running from a full clone -- not, for example, from the Hugging Face Spaces
-deployment described in :doc:`streamlit_app`.
+running from a full clone of the repository.

@@ -29,7 +29,13 @@ def test_download_idsets_reports_progress(tmp_path, mock_ilthermo_responses):
     calls = []
     client.download_idsets(["a", "b"], output_dir=tmp_path,
                            progress_callback=lambda i, total, setid: calls.append((i, total, setid)))
-    assert calls == [(1, 2, "a"), (2, 2, "b")]
+    # Downloads run concurrently, so completion order isn't fixed -- but every set is
+    # reported exactly once, the running count goes 1..total, and total is constant.
+    assert [i for i, _, _ in calls] == [1, 2]
+    assert {total for _, total, _ in calls} == {2}
+    assert {setid for _, _, setid in calls} == {"a", "b"}
+    assert sorted(p.name for p in tmp_path.glob("idset_*.json")) == [
+        "idset_a.json", "idset_b.json"]
 
 
 def test_flatten_idset_strips_sub_tags_and_builds_component_columns():
