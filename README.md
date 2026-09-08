@@ -5,6 +5,7 @@
 This repository contains QSPR models for predicting the density (kg/m<sup>3</sup>) and refractive index (Na D-line) of binary mixtures of ionic liquids (ILs) with water, ethanol, and isopropanol under near-atmospheric pressure conditions (90–110 kPa), at user-specified IL mole fractions and temperatures.
 
 **Live app:** https://qspr-il-density-refractive-index.streamlit.app/
+**Documenation:** https://ilqspr.readthedocs.io/en/latest/
 
 ## Authors
 
