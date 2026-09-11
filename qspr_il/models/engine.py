@@ -30,6 +30,21 @@ if TYPE_CHECKING:
 DEFAULT_TEMPERATURE_K = 298.15
 
 
+def emit_progress(progress_callback, message: str, fraction: float | None = None) -> None:
+    """Forward a progress update to ``progress_callback``.
+
+    Newer callbacks (the Streamlit app) accept an optional ``fraction`` in ``[0, 1]`` to drive
+    a real progress bar; older one-argument callbacks (the CLI's ``print`` lambdas) keep
+    working unchanged.
+    """
+    if not progress_callback:
+        return
+    try:
+        progress_callback(message, fraction)
+    except TypeError:
+        progress_callback(message)
+
+
 def standardize_molecule(smi: str) -> tuple[str, str]:
     """Reionize, normalize functional groups, and strip stereochemistry from a SMILES string.
 
@@ -240,9 +255,8 @@ def prepare_input(
     used by the CLI and Streamlit app to show what's happening instead of a blank wait.
     """
 
-    def _report(message: str) -> None:
-        if progress_callback:
-            progress_callback(message)
+    def _report(message: str, fraction: float | None = None) -> None:
+        emit_progress(progress_callback, message, fraction)
 
     data = data.copy()
 
@@ -250,21 +264,30 @@ def prepare_input(
         raise ValueError(
             f"SMILES column '{smiles_col}' not found in input data. Available columns: {list(data.columns)}")
 
-    _report(f"Standardizing {len(data)} SMILES...")
+    n = len(data)
+    _report(
+        f"Standardizing {n} IL SMILES with RDKit (neutralize charges, strip counter-ions, "
+        "canonicalize, then order cation before anion)...",
+        0.0,
+    )
     standardized_smiles = []
     changes = []
-    for smi in data[smiles_col]:
+    report_every = max(1, n // 25)
+    for i, smi in enumerate(data[smiles_col], start=1):
         standardized_smi, change_summary = standardize_molecule(smi)
         standardized_smiles.append(standardized_smi)
         changes.append(change_summary)
+        if i % report_every == 0 or i == n:
+            _report(f"Standardizing SMILES: {i}/{n}...", 0.5 * i / n)
     data["Standardized_IL_SMILES"] = standardized_smiles
     data["Changes"] = changes
     data = reorder_charged_species(data, smiles_col="Standardized_IL_SMILES")
     invalid_count = sum(1 for c in changes if c == "Invalid SMILES")
     _report(
         f"Standardization complete"
-        + (f" ({invalid_count} of {len(data)} SMILES could not be parsed)" if invalid_count else "")
-        + "."
+        + (f" ({invalid_count} of {n} SMILES could not be parsed)" if invalid_count else "")
+        + ".",
+        0.5,
     )
 
     if mole_fraction_col is not None:
@@ -292,6 +315,7 @@ def predict(
     temp_col: str = "Temperature",
     mole_fraction_col: str | None = "Mole_fraction",
     progress_callback=None,
+    progress_range: tuple[float, float] = (0.0, 1.0),
 ) -> pd.DataFrame:
     """Run the 5-model ensemble over already-prepared ``data`` and append prediction columns.
 
@@ -307,9 +331,11 @@ def predict(
     with one.
     """
 
-    def _report(message: str) -> None:
-        if progress_callback:
-            progress_callback(message)
+    lo, hi = progress_range
+
+    def _report(message: str, fraction: float | None = None) -> None:
+        scaled = None if fraction is None else lo + (hi - lo) * fraction
+        emit_progress(progress_callback, message, scaled)
 
     data = data.copy()
     all_smiles_list = data[smiles_col].tolist()
@@ -320,8 +346,10 @@ def predict(
         {d for md in ensemble.metadata for d in md["descriptors"]})
     n_unique = len({c for s in all_smiles_list for c in str(s).split(".")})
     _report(
-        f"Calculating Mordred descriptors for {len(all_smiles_list)} row(s) "
-        f"({n_unique} unique component(s), {len(union_descriptors)} descriptor(s))..."
+        f"Calculating {len(union_descriptors)} Mordred descriptor(s) for {n_unique} unique "
+        f"molecular component(s) across {len(all_smiles_list)} row(s). This is the slow part "
+        "of a large prediction run; results are cached per unique component.",
+        0.0,
     )
     union_matrix, union_names = _descriptor_matrix(
         all_smiles_list, union_descriptors)
@@ -333,7 +361,7 @@ def predict(
     )
 
     for i, (model, metadata) in enumerate(zip(ensemble.models, ensemble.metadata), 1):
-        _report(f"Model {i}/{n_models}: predicting...")
+        _report(f"Ensemble member {i}/{n_models}: running inference...", 0.5 + 0.5 * (i - 1) / n_models)
         try:
             wanted = set(metadata["descriptors"])
             cols = [col_of[name] for name in union_names if name in wanted]
@@ -348,11 +376,11 @@ def predict(
                 f"Model {i}/{n_models}: prediction failed ({e}) -- recorded as NaN.")
             predictions.append(pd.Series([np.nan] * len(all_smiles_list)))
 
-    _report("Combining ensemble predictions into mean/std...")
+    _report("Combining ensemble predictions into a consensus mean ± standard deviation...", 1.0)
     data["prediction_mean"] = pd.concat(
-        predictions, axis=1).mean(axis=1).round(4)
+        predictions, axis=1).mean(axis=1).round(2)
     data["prediction_std"] = pd.concat(
-        predictions, axis=1).std(axis=1).round(4)
+        predictions, axis=1).std(axis=1).round(2)
     return data
 
 
@@ -375,9 +403,8 @@ def run_prediction(
     blank wait, especially for larger inputs where descriptor calculation dominates runtime.
     """
 
-    def _report(message: str) -> None:
-        if progress_callback:
-            progress_callback(message)
+    def _report(message: str, fraction: float | None = None) -> None:
+        emit_progress(progress_callback, message, fraction)
 
     smiles_col = smiles_col or spec.default_smiles_col
     temp_col = temp_col or spec.default_temp_col
@@ -398,7 +425,7 @@ def run_prediction(
     resolved_mole_fraction_col = "Mole_fraction" if mole_fraction_col is not None else None
 
     if ensemble is None:
-        _report(f"Loading trained ensemble from {spec.model_dir}...")
+        _report(f"Loading the trained ensemble (joblib model files) from {spec.model_dir}...", 0.5)
         ensemble = load_models_and_metadata(spec.model_dir)
 
     return predict(
@@ -408,4 +435,5 @@ def run_prediction(
         temp_col="Temperature",
         mole_fraction_col=resolved_mole_fraction_col,
         progress_callback=progress_callback,
+        progress_range=(0.5, 1.0),
     )

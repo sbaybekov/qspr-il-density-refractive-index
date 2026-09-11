@@ -147,7 +147,7 @@ def test_build_curated_dataset_reports_progress():
     cleaning.build_curated_dataset(
         raw_df, "Density", solvent_name=None, progress_callback=messages.append)
     assert any("Standardizing" in m for m in messages)
-    assert any("temperature/pressure" in m for m in messages)
+    assert any("temperature" in m and "pressure" in m for m in messages)
     assert any("Deduplication" in m for m in messages)
 
 

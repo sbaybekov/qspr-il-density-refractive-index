@@ -64,7 +64,7 @@ def test_train_ensemble_pure_produces_requested_number_of_models(tmp_path):
     assert len(ensemble.metadata) == 3
     assert len(metrics) == 3
     assert all("rmse" in m and "r2" in m for m in metrics)
-    assert any("Computing Mordred descriptors" in msg for msg in messages)
+    assert any("Mordred descriptors" in msg for msg in messages)
     assert any("Training complete" in msg for msg in messages)
 
     # saved artifacts are a valid, loadable ensemble

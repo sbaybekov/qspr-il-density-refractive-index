@@ -179,8 +179,8 @@ def test_run_prediction_reports_progress(fake_ensemble_dir, sample_pure_predicti
         sample_pure_prediction_df, spec, ensemble=ensemble, smiles_col="SMILES", progress_callback=messages.append
     )
     assert any("Standardizing" in m for m in messages)
-    assert any("Model 1/5" in m for m in messages)
-    assert any("Model 5/5" in m for m in messages)
+    assert any("member 1/5" in m for m in messages)
+    assert any("member 5/5" in m for m in messages)
     assert any("Combining ensemble predictions" in m for m in messages)
 
 

@@ -24,7 +24,11 @@ from mordred import Calculator, descriptors as mordred_descriptors
 from sklearn.model_selection import GroupKFold
 from xgboost import XGBRegressor
 
-from qspr_il.models.engine import LoadedEnsemble, process_il_smiles_list
+from qspr_il.models.engine import (
+    LoadedEnsemble,
+    emit_progress,
+    process_il_smiles_list,
+)
 
 DEFAULT_HYPERPARAMETERS = {
     "max_depth": 6,
@@ -87,9 +91,8 @@ def train_ensemble(
     how well it did before trusting it.
     """
 
-    def _report(message: str) -> None:
-        if progress_callback:
-            progress_callback(message)
+    def _report(message: str, fraction: float | None = None) -> None:
+        emit_progress(progress_callback, message, fraction)
 
     hyperparameters = hyperparameters or DEFAULT_HYPERPARAMETERS
     output_dir = Path(output_dir)
@@ -102,9 +105,13 @@ def train_ensemble(
         raise ValueError(
             f"Not enough usable rows ({len(df)}) to train a model -- need at least 4.")
 
-    _report(f"Computing Mordred descriptors for {len(df)} rows...")
-    smiles_list = df[smiles_col].tolist()
     all_names = all_2d_descriptor_names()
+    _report(
+        f"Step 1/3 · Computing the full set of {len(all_names)} 2D Mordred descriptors for "
+        f"{len(df)} training rows. This is the slowest stage of training.",
+        0.0,
+    )
+    smiles_list = df[smiles_col].tolist()
     descriptor_matrix = process_il_smiles_list(smiles_list, all_names)
     usable_descriptors = select_usable_descriptors(
         descriptor_matrix, all_names)
@@ -112,7 +119,10 @@ def train_ensemble(
         raise ValueError(
             "No usable Mordred descriptors survived filtering -- check the input SMILES.")
     _report(
-        f"Selected {len(usable_descriptors)} usable descriptors (of {len(all_names)} computed).")
+        f"Step 1/3 · Kept {len(usable_descriptors)} usable descriptors (dropped constant / "
+        f"all-missing columns from the {len(all_names)} computed).",
+        0.5,
+    )
 
     keep_idx = [all_names.index(n) for n in usable_descriptors]
     feature_blocks = [descriptor_matrix[:, keep_idx],
@@ -127,7 +137,8 @@ def train_ensemble(
     n_splits = min(n_models, n_unique_groups) if n_unique_groups >= 2 else 1
     if n_splits < n_models:
         _report(
-            f"Only {n_unique_groups} unique IL SMILES available -- training {n_splits} model(s), not {n_models}.")
+            f"Step 2/3 · Only {n_unique_groups} unique IL SMILES available -- training "
+            f"{n_splits} model(s), not {n_models}.")
     splits = (
         [(np.arange(len(X)), np.arange(len(X)))]
         if n_splits == 1
@@ -137,7 +148,10 @@ def train_ensemble(
     models, metadata_list, metrics = [], [], []
     for i, (train_idx, val_idx) in enumerate(splits, 1):
         _report(
-            f"Model {i}/{len(splits)}: fitting XGBoost on {len(train_idx)} row(s)...")
+            f"Step 3/3 · Model {i}/{len(splits)}: fitting XGBoost on {len(train_idx)} row(s), "
+            f"validating on {len(val_idx)} held-out row(s) (group k-fold by IL SMILES)...",
+            0.55 + 0.4 * (i - 1) / len(splits),
+        )
         model = XGBRegressor(**hyperparameters)
         model.fit(X[train_idx], y[train_idx])
 
@@ -147,7 +161,9 @@ def train_ensemble(
         ss_tot = float(np.sum((y[val_idx] - y[val_idx].mean()) ** 2))
         r2 = float(1 - ss_res / ss_tot) if ss_tot > 0 else float("nan")
         _report(
-            f"Model {i}/{len(splits)}: validation RMSE={rmse:.4g}, R2={r2:.3f}")
+            f"Step 3/3 · Model {i}/{len(splits)}: validation RMSE={rmse:.4g}, R2={r2:.3f}",
+            0.55 + 0.4 * i / len(splits),
+        )
 
         metadata = {"hyperparameters": hyperparameters,
                     "descriptors": usable_descriptors}
@@ -163,5 +179,5 @@ def train_ensemble(
         )
 
     _report(
-        f"Training complete. Saved {len(models)} model(s) to {output_dir}.")
+        f"Training complete. Saved {len(models)} model(s) to {output_dir}.", 1.0)
     return LoadedEnsemble(models=models, metadata=metadata_list), metrics

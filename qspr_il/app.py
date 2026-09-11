@@ -29,8 +29,6 @@ from qspr_il.registry import ModelSpec, iter_specs
 from qspr_il.registry import find as find_spec
 
 _BANNER_IMAGE = Path(__file__).resolve().parent / "assets" / "il_github.png"
-_UMAP_DIR = Path(__file__).resolve().parent.parent / \
-    "results" / "interactive_umap"
 DEFAULT_TEMP_RANGE = (253.0, 573.0)
 DEFAULT_PRESSURE_RANGE = (90.0, 110.0)
 KNOWN_DATA_SOLVENTS = ["Pure ionic liquid",
@@ -51,6 +49,33 @@ def _select_spec() -> ModelSpec:
     return next(s for s in specs if s.property_name == property_name and s.solvent == solvent)
 
 
+def _show_df(df: pd.DataFrame, **kwargs) -> None:
+    """``st.dataframe`` with every float column rounded to 2 decimal places for display."""
+    st.dataframe(df.round(2), **kwargs)
+
+
+def _make_progress_callback(status):
+    """Build a ``progress_callback(message, fraction=None)`` for the pipeline functions.
+
+    Every message is appended to the ``st.status`` log (so the user gets the full, detailed
+    narrative of what each stage does), and whenever a ``fraction`` in ``[0, 1]`` is supplied
+    it also drives an in-place ``st.progress`` bar -- a tqdm-style moving bar rather than only
+    a growing list of lines.
+    """
+    bar = {"widget": None}
+
+    def _on_progress(message: str, fraction: float | None = None) -> None:
+        status.write(message)
+        if fraction is not None:
+            pct = max(0, min(100, int(round(fraction * 100))))
+            if bar["widget"] is None:
+                bar["widget"] = status.progress(pct, text=message)
+            else:
+                bar["widget"].progress(pct, text=message)
+
+    return _on_progress
+
+
 def _run_prediction_with_status(
     data: pd.DataFrame,
     spec: ModelSpec,
@@ -67,9 +92,7 @@ def _run_prediction_with_status(
     Returns the result DataFrame, or ``None`` if prediction failed (the caller should stop).
     """
     status = st.status(label, expanded=True)
-
-    def _on_progress(message: str) -> None:
-        status.write(message)
+    _on_progress = _make_progress_callback(status)
 
     try:
         result = run_prediction(
@@ -108,9 +131,9 @@ def _render_report(result: pd.DataFrame, spec: ModelSpec) -> None:
     cols = st.columns(4)
     cols[0].metric("Rows predicted", f"{int(valid.sum())} / {len(result)}")
     cols[1].metric(f"Mean {spec.target_column}",
-                   f"{result.loc[valid, 'prediction_mean'].mean():.4f}" if valid.any() else "n/a")
+                   f"{result.loc[valid, 'prediction_mean'].mean():.2f}" if valid.any() else "n/a")
     cols[2].metric("Mean ensemble std",
-                   f"{std_series.mean():.4f}" if len(std_series) else "n/a")
+                   f"{std_series.mean():.2f}" if len(std_series) else "n/a")
     cols[3].metric("Unparseable SMILES", int(invalid_smiles.sum()))
 
     if valid.sum() == 0:
@@ -124,7 +147,7 @@ def _render_report(result: pd.DataFrame, spec: ModelSpec) -> None:
     hist_df = pd.DataFrame(
         {"count": counts},
         index=[
-            f"{bin_edges[i]:.3g}-{bin_edges[i + 1]:.3g}" for i in range(len(bin_edges) - 1)],
+            f"{bin_edges[i]:.2f}-{bin_edges[i + 1]:.2f}" for i in range(len(bin_edges) - 1)],
     )
     st.bar_chart(hist_df)
 
@@ -134,12 +157,12 @@ def _render_report(result: pd.DataFrame, spec: ModelSpec) -> None:
 
     top_uncertain = result.loc[valid].sort_values(
         "prediction_std", ascending=False).head(5)
-    with st.expander(f"5 highest-uncertainty predictions (std > {high_uncertainty_threshold:.4g})"):
-        st.dataframe(top_uncertain)
+    with st.expander(f"5 highest-uncertainty predictions (std > {high_uncertainty_threshold:.2f})"):
+        _show_df(top_uncertain)
 
     if invalid_smiles.any():
         with st.expander(f"{int(invalid_smiles.sum())} row(s) with unparseable SMILES (excluded above)"):
-            st.dataframe(result.loc[invalid_smiles])
+            _show_df(result.loc[invalid_smiles])
 
 
 _PDF_TABLE_COLUMNS = [
@@ -180,8 +203,8 @@ def _build_pdf_report(result: pd.DataFrame, spec: ModelSpec) -> bytes:
     if valid.any():
         elements.append(
             Paragraph(
-                f"Mean {spec.target_column}: {result.loc[valid, 'prediction_mean'].mean():.4f} "
-                f"(mean ensemble std {result.loc[valid, 'prediction_std'].mean():.4f})",
+                f"Mean {spec.target_column}: {result.loc[valid, 'prediction_mean'].mean():.2f} "
+                f"(mean ensemble std {result.loc[valid, 'prediction_std'].mean():.2f})",
                 styles["Normal"],
             )
         )
@@ -221,7 +244,7 @@ def _build_pdf_report(result: pd.DataFrame, spec: ModelSpec) -> bytes:
     elements.append(Paragraph("Results", styles["Heading2"]))
     table_cols = [c for c in _PDF_TABLE_COLUMNS if c in result.columns]
     table_df = result[table_cols].head(_PDF_MAX_TABLE_ROWS)
-    table_data = [table_cols] + table_df.astype(str).values.tolist()
+    table_data = [table_cols] + table_df.round(2).astype(str).values.tolist()
     table = Table(table_data, repeatRows=1)
     table.setStyle(
         TableStyle(
@@ -275,36 +298,27 @@ def _render_download_buttons(result: pd.DataFrame, spec: ModelSpec, file_stub: s
     )
 
 
-def _umap_file_for_spec(spec: ModelSpec) -> Path | None:
-    """The pre-generated UMAP visualization matching ``spec``, if one exists.
+def _pick_directory_dialog() -> str | None:
+    """Open a native OS folder-picker and return the chosen path.
 
-    Only the 6 mixture models (density/RI x water/ethanol/isopropanol) have one -- there's no
-    pure-IL variant in ``results/interactive_umap/``.
+    Only works when the app runs on the same machine as the browser (i.e. local
+    ``streamlit run``); on a remote/hosted server there is no desktop to show a
+    dialog, so this returns ``None`` and the user types the path instead.
     """
-    if spec.is_pure:
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        root.wm_attributes("-topmost", 1)
+        chosen = filedialog.askdirectory(title="Select a folder to save the trained model")
+        root.destroy()
+        return chosen or None
+    except Exception as e:  # no display, tkinter missing, hosted env, ...
+        st.warning(
+            f"Couldn't open a folder dialog here ({e}). Type the destination path manually.")
         return None
-    property_token = "density" if spec.property_name == "Density" else "ri"
-    path = _UMAP_DIR / \
-        f"{property_token}_{spec.solvent.lower()}_neighbors5_dist01.html"
-    return path if path.exists() else None
-
-
-def _render_umap_expander(spec: ModelSpec) -> None:
-    """Show the matching UMAP visualization (training data vs. external test set) for this
-    model's predictions, collapsed by default so the heavy HTML file isn't loaded unless asked
-    for."""
-    umap_file = _umap_file_for_spec(spec)
-    if umap_file is None:
-        return
-    with st.expander("Training data vs. external test set (UMAP)", expanded=False):
-        st.caption(
-            "2D UMAP projection (n_neighbors=5, min_dist=0.1) of the Mordred descriptor space "
-            f"for {spec.label}."
-        )
-        try:
-            st.iframe(umap_file, height=700)
-        except Exception as e:
-            st.error(f"Could not load {umap_file.name}: {e}")
 
 
 def _render_auto_train(df: pd.DataFrame, resolved_property: str, solvent_name: str | None) -> None:
@@ -315,14 +329,27 @@ def _render_auto_train(df: pd.DataFrame, resolved_property: str, solvent_name: s
     st.info(
         f"No trained prediction model exists yet for '{resolved_property}'.")
     system_label = solvent_name or "pure"
-    default_dir = f"results/custom_models/{resolved_property.lower().replace(' ', '_')}_{system_label}_ensemble_model"
+    model_folder_name = (
+        f"{resolved_property.lower().replace(' ', '_')}_{system_label}_ensemble_model")
+    base_dir = st.session_state.get(
+        "custom_model_base_dir", str(Path("results/custom_models").resolve()))
 
     col1, col2 = st.columns([1, 2])
     with col1:
         n_models = st.number_input(
             "Ensemble members to train", min_value=1, max_value=5, value=5)
     with col2:
-        output_dir = st.text_input("Save trained model to", value=default_dir)
+        if st.button("📁 Browse for a folder on this PC…"):
+            picked = _pick_directory_dialog()
+            if picked:
+                st.session_state["custom_model_base_dir"] = picked
+                base_dir = picked
+        output_dir = st.text_input(
+            "Save trained model to",
+            value=str(Path(base_dir) / model_folder_name),
+            help="Full path where the trained model folder will be written. Use 'Browse' "
+            "to pick a folder on the machine running this app.",
+        )
 
     if st.button("Train a new model on this data", type="primary"):
         from qspr_il.models.training import train_ensemble
@@ -330,9 +357,7 @@ def _render_auto_train(df: pd.DataFrame, resolved_property: str, solvent_name: s
         mole_fraction_col = None if solvent_name is None else "Mole_fraction_IL"
         status = st.status(
             f"Training a new model for '{resolved_property}'...", expanded=True)
-
-        def _on_progress(message: str) -> None:
-            status.write(message)
+        _on_progress = _make_progress_callback(status)
 
         try:
             ensemble, metrics = train_ensemble(
@@ -378,7 +403,7 @@ def _render_auto_train(df: pd.DataFrame, resolved_property: str, solvent_name: s
 
     st.markdown(
         "**Validation metrics** (group k-fold by IL SMILES, not this project's original tuning methodology)")
-    st.dataframe(pd.DataFrame(metrics))
+    _show_df(pd.DataFrame(metrics))
 
     if st.button(f"Run this newly trained model on the fetched data", type="primary"):
         result = _run_prediction_with_status(
@@ -386,7 +411,7 @@ def _render_auto_train(df: pd.DataFrame, resolved_property: str, solvent_name: s
         )
         if result is None:
             return
-        st.dataframe(result)
+        _show_df(result)
         _render_download_buttons(
             result, spec, f"{resolved_property.lower().replace(' ', '_')}_{system_label}_predictions_from_custom_model")
         _render_report(result, spec)
@@ -448,9 +473,7 @@ def _run_data_mode(also_run_model: bool) -> None:
     if st.button("Fetch data", type="primary"):
         status = st.status(
             f"Fetching '{property_query}' data from ILThermo...", expanded=True)
-
-        def _on_progress(message: str) -> None:
-            status.write(message)
+        _on_progress = _make_progress_callback(status)
 
         try:
             df = fetch_curated_dataset(
@@ -495,7 +518,7 @@ def _run_data_mode(also_run_model: bool) -> None:
         return
 
     st.success(f"Fetched {len(df)} curated rows for '{resolved_property}'.")
-    st.dataframe(df)
+    _show_df(df)
     st.download_button(
         "Download curated CSV",
         df.to_csv(index=False),
@@ -522,12 +545,11 @@ def _run_data_mode(also_run_model: bool) -> None:
         )
         if result is None:
             return
-        st.dataframe(result)
+        _show_df(result)
         _render_download_buttons(
             result, spec, f"{spec.property_name.lower().replace(' ', '_')}_{spec.solvent.replace(' ', '_')}_predictions_from_fetched_data"
         )
         _render_report(result, spec)
-        _render_umap_expander(spec)
 
 
 def _run_csv_mode(spec: ModelSpec) -> None:
@@ -559,11 +581,10 @@ def _run_csv_mode(spec: ModelSpec) -> None:
         return
     result, _ = cached
 
-    st.dataframe(result)
+    _show_df(result)
     _render_download_buttons(
         result, spec, f"{spec.property_name.lower().replace(' ', '_')}_{spec.solvent.replace(' ', '_')}_predictions")
     _render_report(result, spec)
-    _render_umap_expander(spec)
 
 
 def _run_single_entry_mode(spec: ModelSpec) -> None:
@@ -598,12 +619,14 @@ def _run_single_entry_mode(spec: ModelSpec) -> None:
 
         mean = result.loc[0, "prediction_mean"]
         std = result.loc[0, "prediction_std"]
-        st.metric(f"Predicted {spec.target_column}", f"{mean} ± {std}")
+        st.metric(
+            f"Predicted {spec.target_column}",
+            f"{mean:.2f} ± {std:.2f}",
+        )
         if result.loc[0, "Changes"] != "No changes":
             st.caption(f"SMILES standardization: {result.loc[0, 'Changes']}")
         _render_download_buttons(
             result, spec, f"{spec.property_name.lower().replace(' ', '_')}_{spec.solvent.replace(' ', '_')}_prediction")
-        _render_umap_expander(spec)
 
 
 def main() -> None:
@@ -621,8 +644,7 @@ def main() -> None:
         "What do you want to do?",
         ["Run prediction model", "Fetch & clean data", "Both"],
         help="'Both' fetches ILThermo data for any property, then offers to run the "
-        "matching trained model on it if one exists (currently: density, refractive index). "
-        "Running a model shows its matching UMAP visualization in the results, if one exists.",
+        "matching trained model on it if one exists (currently: density, refractive index).",
     )
 
     if action == "Fetch & clean data":

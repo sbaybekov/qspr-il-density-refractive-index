@@ -66,7 +66,11 @@ import requests
 from rdkit.Chem import Descriptors, MolFromSmiles, rdMolDescriptors
 
 from qspr_il.data.ionics import client as ionics_client
-from qspr_il.models.engine import reorder_charged_species, standardize_molecule
+from qspr_il.models.engine import (
+    emit_progress as _emit,
+    reorder_charged_species,
+    standardize_molecule,
+)
 
 PUBCHEM_SMILES_URL = "https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{name}/property/IsomericSMILES/TXT"
 
@@ -127,6 +131,13 @@ def list_available_properties() -> list[str]:
         return [row["property"] for row in csv.DictReader(f) if row.get("property")]
 
 
+# Common names users type that don't literally appear in ILThermo's display strings.
+_PROPERTY_SYNONYMS = {
+    "interfacial tension": "surface tension liquid gas",
+    "surface tension": "surface tension liquid gas",
+}
+
+
 def resolve_property_display_name(idsets_json: dict, requested: str) -> str | None:
     """Match a user-supplied property name/short-name against a live search result's
     actual property display names (e.g. resolve ``"refractive-index"`` or ``"refractive"``
@@ -139,14 +150,23 @@ def resolve_property_display_name(idsets_json: dict, requested: str) -> str | No
     candidates = sorted({row[2]
                         for row in idsets_json.get("res", []) if row[2]})
     requested_norm = requested.strip().lower().replace("-", " ")
+    requested_norm = _PROPERTY_SYNONYMS.get(requested_norm, requested_norm)
     for candidate in candidates:
-        if candidate.lower() == requested_norm:
+        if candidate.lower().replace("-", " ") == requested_norm:
             return candidate
     for candidate in candidates:
-        candidate_norm = candidate.lower()
+        candidate_norm = candidate.lower().replace("-", " ")
         if requested_norm in candidate_norm or candidate_norm in requested_norm:
             return candidate
-    return None
+    # Token-overlap fallback: pick the candidate sharing the most words with the
+    # request (e.g. "interfacial tension" -> "Surface tension liquid-gas").
+    requested_tokens = set(requested_norm.replace("-", " ").split())
+    best, best_overlap = None, 0
+    for candidate in candidates:
+        overlap = len(requested_tokens & set(candidate.lower().replace("-", " ").split()))
+        if overlap > best_overlap:
+            best, best_overlap = candidate, overlap
+    return best
 
 
 def compute_molecular_fields(smiles: str) -> dict:
@@ -425,6 +445,7 @@ def build_curated_dataset(
     property_range: tuple[float, float] | None = None,
     use_pubchem_fallback: bool = True,
     progress_callback=None,
+    progress_range: tuple[float, float] = (0.0, 1.0),
 ) -> pd.DataFrame:
     """Turn a raw, flattened+SMILES-joined ILThermo CSV (concatenated across idsets) into a
     curated DataFrame with the generic :data:`GENERIC_MIXTURE_COLUMNS`/:data:`GENERIC_PURE_COLUMNS`
@@ -443,9 +464,11 @@ def build_curated_dataset(
     show what the cleaning step is actually doing.
     """
 
-    def _report(message: str) -> None:
-        if progress_callback:
-            progress_callback(message)
+    lo, hi = progress_range
+
+    def _report(message: str, fraction: float | None = None) -> None:
+        scaled = None if fraction is None else lo + (hi - lo) * fraction
+        _emit(progress_callback, message, scaled)
 
     is_pure = solvent_name is None
     columns = raw_df.columns
@@ -477,11 +500,32 @@ def build_curated_dataset(
         raise ValueError(
             "raw_df is missing a recognizable Temperature or property-value column.")
 
+    n_raw = len(raw_df)
     _report(
-        f"Standardizing SMILES and resolving component structures for {len(raw_df)} raw rows...")
+        f"Step 5/5 · Curating {n_raw} raw measurement rows. For each row this: "
+        "(1) picks the temperature / pressure / mole-fraction / property columns that "
+        "actually belong to that row's source dataset (ILThermo names them differently per "
+        "dataset); (2) identifies which component is the ionic liquid and which is the "
+        "solvent; (3) resolves each component to a canonical SMILES via the bundled keydata "
+        "lookup table, falling back to a PubChem name search for anything it misses; "
+        "(4) standardizes the IL structure with RDKit (neutralize, strip salts, canonicalize) "
+        "and derives cation/anion SMILES, molecular weight and metal-content flags. "
+        "PubChem look-ups are network calls, so the first pass over a large, uncached "
+        "dataset is the slow part.",
+        0.0,
+    )
     rows = []
+    skipped = 0
     smiles_cache: dict[str, str | None] = {}
-    for _, row in raw_df.iterrows():
+    report_every = max(1, n_raw // 50)
+    for raw_i, (_, row) in enumerate(raw_df.iterrows(), start=1):
+        if raw_i % report_every == 0 or raw_i == n_raw:
+            _report(
+                f"Step 5/5 · Standardizing structures: row {raw_i}/{n_raw} "
+                f"({len(rows)} kept, {skipped} dropped so far, "
+                f"{len(smiles_cache)} unique compounds resolved).",
+                raw_i / n_raw,
+            )
         temp_col = next((c for c in temp_cols if pd.notna(row.get(c))), None)
         pressure_col = next(
             (c for c in pressure_cols if pd.notna(row.get(c))), None)
@@ -490,6 +534,7 @@ def build_curated_dataset(
         property_col = next(
             (c for c in property_cols if pd.notna(row.get(c))), None)
         if temp_col is None or property_col is None:
+            skipped += 1
             continue  # this row's own idset didn't provide a usable temperature/property reading
 
         components = []
@@ -508,6 +553,7 @@ def build_curated_dataset(
 
         if is_pure:
             if len(components) != 1:
+                skipped += 1
                 continue
             il_component = components[0]
             solvent_component = None
@@ -519,6 +565,7 @@ def build_curated_dataset(
             il_component = next(
                 (c for c in components if c is not solvent_component), None)
             if solvent_component is None or il_component is None:
+                skipped += 1
                 continue
             # Resolve the solvent's SMILES by name (see SOLVENT_SMILES_BY_NAME) rather than
             # trusting addSmiles's id-based lookup, which was found to miss known solvents
@@ -542,6 +589,7 @@ def build_curated_dataset(
         )
         molecular_fields = compute_molecular_fields(il_smiles)
         if molecular_fields["Changes"] == "Invalid SMILES":
+            skipped += 1
             continue  # unparseable SMILES: neither the bundled keydata table nor PubChem resolved it
 
         record = {
@@ -598,25 +646,37 @@ def build_curated_dataset(
     target_columns = GENERIC_PURE_COLUMNS if is_pure else GENERIC_MIXTURE_COLUMNS
     dropped_unresolvable = len(raw_df) - len(rows)
     _report(
-        f"Resolved {len(rows)} of {len(raw_df)} raw rows"
-        + (f" ({dropped_unresolvable} dropped: unresolvable SMILES)" if dropped_unresolvable else "")
-        + "."
+        f"Step 5/5 · Standardized {len(rows)} of {len(raw_df)} raw rows"
+        + (f" ({dropped_unresolvable} dropped: missing conditions or unresolvable SMILES)"
+           if dropped_unresolvable else "")
+        + f". {len(smiles_cache)} unique compound name(s) resolved.",
+        0.85,
     )
     curated = pd.DataFrame(rows)
     if curated.empty:
-        _report("No rows remained after standardization -- nothing to clean.")
+        _report("Step 5/5 · No rows remained after standardization -- nothing to clean.", 1.0)
         return pd.DataFrame(columns=target_columns)
 
     curated["Record_ID"] = [f"{r['setid']}_{i}" for i, r in enumerate(rows)]
 
     before_conditions = len(curated)
+    _report(
+        "Step 5/5 · Applying condition filters (temperature "
+        f"{temp_range[0]:g}-{temp_range[1]:g} K"
+        + (f", pressure {pressure_range[0]:g}-{pressure_range[1]:g} kPa" if pressure_range else "")
+        + (f", property value {property_range[0]:g}-{property_range[1]:g}" if property_range else "")
+        + ")...",
+        0.9,
+    )
     curated = filter_conditions(
         curated, pressure_range=pressure_range, temp_range=temp_range)
     if property_range is not None:
         curated = filter_property_range(
             curated, "Property_value", property_range)
     _report(
-        f"{len(curated)} of {before_conditions} rows remain after temperature/pressure/property-range filtering."
+        f"Step 5/5 · {len(curated)} of {before_conditions} rows within the allowed "
+        "temperature / pressure / property ranges.",
+        0.94,
     )
 
     key_cols = ["IL_SMILES", "Temperature (K)"] if is_pure else [
@@ -629,8 +689,10 @@ def build_curated_dataset(
         (curated["Data_quality_flag"] == "conflicting_duplicate").sum())
     curated = curated[curated["Data_quality_flag"] != "duplicate_dropped"]
     _report(
-        f"Deduplication: dropped {duplicate_count} exact duplicate(s), flagged {conflicting_count} "
-        f"conflicting duplicate(s) for review. {len(curated)} curated rows remain."
+        f"Step 5/5 · Deduplication (keyed on {', '.join(key_cols)}): dropped {duplicate_count} "
+        f"exact duplicate(s), flagged {conflicting_count} conflicting duplicate(s) for review. "
+        f"{len(curated)} curated rows remain.",
+        1.0,
     )
 
     for col in target_columns:
@@ -673,9 +735,8 @@ def fetch_curated_dataset(
     and Streamlit app to show what's actually happening, not just a single opaque spinner.
     """
 
-    def _report(message: str) -> None:
-        if progress_callback:
-            progress_callback(message)
+    def _report(message: str, fraction: float | None = None) -> None:
+        _emit(progress_callback, message, fraction)
 
     ncmp = "1" if solvent_name is None else "2"
     data_root_path = ionics_client.get_data_dir(data_root)
@@ -685,10 +746,13 @@ def fetch_curated_dataset(
         for label, value in (("year", year), ("author", author), ("keyword", keyword))
         if value
     ]
+    system_desc = "pure ionic liquids" if solvent_name is None else f"ionic liquid + {solvent_name} mixtures"
     _report(
-        f"Searching ILThermo for '{property_query}'"
-        + (f" ({', '.join(active_filters)})" if active_filters else "")
-        + "..."
+        f"Step 1/5 · Querying the ILThermo `ilsearch` catalogue for '{property_query}' "
+        f"measurements of {system_desc}"
+        + (f", filtered by {', '.join(active_filters)}" if active_filters else "")
+        + ". This returns only dataset metadata, not the measurements themselves.",
+        0.0,
     )
     idsets_path = ionics_client.getIdsets(
         prop=None, ncmp=ncmp, year=year, auth=author, keyw=keyword, data_root=data_root_path)
@@ -707,24 +771,47 @@ def fetch_curated_dataset(
     if max_datasets is not None:
         matching = matching[:max_datasets]
     _report(
-        f"Resolved property: '{display_name}'. Found {total_matching} matching dataset(s)"
-        + (f", downloading the first {len(matching)}." if max_datasets is not None else ".")
+        f"Step 1/5 · Matched property '{display_name}'. {total_matching} dataset(s) in the "
+        "catalogue"
+        + (f"; downloading the first {len(matching)} (max_datasets limit)."
+           if max_datasets is not None and total_matching > len(matching)
+           else f"; all {len(matching)} will be downloaded."),
+        0.05,
     )
 
     safe_property = re.sub(r"[^a-zA-Z0-9]+", "_",
                            display_name.strip().lower()).strip("_")
     folder_name = f"{safe_property}_{'pure' if solvent_name is None else solvent_name}_data"
 
-    def _download_progress(i: int, total: int, setid: str) -> None:
-        _report(f"Downloading dataset {i}/{total} ({setid})...")
+    n_sets = len(matching)
 
+    def _download_progress(i: int, total: int, setid: str) -> None:
+        # Downloading is roughly the first half of the wait; map it to 0.05 - 0.45.
+        _report(
+            f"Step 2/5 · Downloading raw dataset {i}/{total} from ILThermo (set {setid})...",
+            0.05 + 0.40 * (i / total),
+        )
+
+    _report(
+        f"Step 2/5 · Downloading {n_sets} raw dataset file(s) from ILThermo over a "
+        "keep-alive HTTP session...",
+        0.05,
+    )
     ionics_client.download_idsets(
         matching, output_dir=data_root_path / folder_name, progress_callback=_download_progress
     )
-    _report("Converting downloaded data to CSV...")
+    _report(
+        f"Step 3/5 · Flattening {n_sets} nested ILThermo JSON file(s) into wide CSV tables "
+        "(one row per measured data point)...",
+        0.45,
+    )
     ionics_client.convert2csv(folder_name=folder_name,
                               data_root=data_root_path)
-    _report("Resolving component SMILES (bundled lookup table, PubChem fallback for the rest)...")
+    _report(
+        "Step 4/5 · Joining component structures onto each row from the bundled keydata "
+        "lookup table (PubChem name search fills the gaps later, during curation)...",
+        0.55,
+    )
     ionics_client.addSmiles(
         folder_name=f"csv_{folder_name}", data_root=data_root_path)
 
@@ -732,9 +819,16 @@ def fetch_curated_dataset(
     frames = [pd.read_csv(f) for f in smiles_dir.glob(
         "*.csv")] if smiles_dir.exists() else []
     if not frames:
-        _report("No data files were produced by the download/convert step.")
+        _report("No data files were produced by the download/convert step.", 1.0)
         target_columns = GENERIC_PURE_COLUMNS if solvent_name is None else GENERIC_MIXTURE_COLUMNS
         return pd.DataFrame(columns=target_columns)
 
     raw_df = pd.concat(frames, ignore_index=True)
-    return build_curated_dataset(raw_df, display_name, solvent_name, progress_callback=progress_callback, **filter_kwargs)
+    _report(
+        f"Step 4/5 · Merged {len(frames)} file(s) into {len(raw_df)} raw measurement rows. "
+        "Starting curation...",
+        0.6,
+    )
+    return build_curated_dataset(
+        raw_df, display_name, solvent_name, progress_callback=progress_callback,
+        progress_range=(0.6, 1.0), **filter_kwargs)
